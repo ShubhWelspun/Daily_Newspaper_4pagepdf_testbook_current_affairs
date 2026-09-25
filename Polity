@@ -1,0 +1,305 @@
+# -*- coding: utf-8 -*-
+import reportlab
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm, mm
+from reportlab.lib import colors
+from reportlab.platypus import (BaseDocTemplate, PageTemplate, Frame, Paragraph, Spacer,
+                                 Table, TableStyle, KeepTogether, FrameBreak, NextPageTemplate,
+                                 Flowable, HRFlowable)
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_JUSTIFY
+from reportlab.pdfgen import canvas as canvaslib
+
+PAGE_W, PAGE_H = A4
+MARGIN = 1.1 * cm
+GUTTER = 0.5 * cm
+COL_W = (PAGE_W - 2*MARGIN - GUTTER) / 2.0
+
+NAVY = colors.HexColor('#0B2447')
+NAVY2 = colors.HexColor('#19376D')
+GOLD = colors.HexColor('#B08D57')
+LIGHT = colors.HexColor('#EEF3F9')
+GREY = colors.HexColor('#555555')
+
+HEADER_TEXT = "PW Ollie IAS — Indian Constitution: Making, Evolution & Provisions"
+
+styles = getSampleStyleSheet()
+
+def mk(name, **kw):
+    base = kw.pop('parent', styles['Normal'])
+    return ParagraphStyle(name, parent=base, **kw)
+
+S_SECTION = mk('Section', fontName='Helvetica-Bold', fontSize=11, textColor=colors.white,
+               backColor=NAVY, leading=13, spaceBefore=6, spaceAfter=5, leftIndent=4,
+               borderPadding=(3, 3, 3, 3))
+S_SUB = mk('Sub', fontName='Helvetica-Bold', fontSize=9.3, textColor=NAVY2, leading=11,
+           spaceBefore=5, spaceAfter=2)
+S_BODY = mk('Body', fontName='Helvetica', fontSize=9, leading=10.8, spaceAfter=2.3, alignment=TA_JUSTIFY)
+S_BULLET = mk('Bullet', parent=S_BODY, leftIndent=8, bulletIndent=0, spaceAfter=2)
+S_Q = mk('Q', fontName='Helvetica-Bold', fontSize=8.5, leading=10.2, spaceBefore=4, spaceAfter=1.5,
+         textColor=colors.black)
+S_OPT = mk('Opt', fontName='Helvetica', fontSize=8.5, leading=10, leftIndent=8, spaceAfter=1)
+S_TAG = mk('Tag', fontName='Helvetica-Oblique', fontSize=7.3, textColor=GREY, spaceAfter=1)
+S_TABLE_HDR = mk('TH', fontName='Helvetica-Bold', fontSize=8, textColor=colors.white, alignment=TA_CENTER)
+S_TABLE_CELL = mk('TC', fontName='Helvetica', fontSize=7.8, leading=9.4)
+S_ANS_CELL = mk('AC', fontName='Helvetica', fontSize=7.5, leading=9)
+
+# ---------------------------------------------------------------- helpers
+
+class SolveBox(Flowable):
+    """A bordered empty rectangle for the reader to work out the answer."""
+    def __init__(self, width, height=2.6*cm, label="Solve here"):
+        Flowable.__init__(self)
+        self.width = width
+        self.height = height
+        self.label = label
+
+    def draw(self):
+        c = self.canv
+        c.saveState()
+        c.setStrokeColor(colors.HexColor('#8AA0BF'))
+        c.setLineWidth(0.6)
+        c.setDash(2, 2)
+        c.rect(0, 0, self.width, self.height)
+        c.setDash()
+        c.setFont('Helvetica-Oblique', 6.5)
+        c.setFillColor(colors.HexColor('#9AA7B5'))
+        c.drawString(3, self.height - 8, self.label)
+        c.restoreState()
+
+    def wrap(self, availWidth, availHeight):
+        return (self.width, self.height)
+
+
+def section_header(text):
+    return Paragraph(text, S_SECTION)
+
+
+def sub_header(text):
+    return Paragraph(text, S_SUB)
+
+
+def body(text):
+    return Paragraph(text, S_BODY)
+
+
+def bullet(text):
+    return Paragraph("&bull;&nbsp;" + text, S_BULLET)
+
+
+def make_table(data, col_widths, header=True, font_size=7.8):
+    style_cmds = [
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#B9C6D6')),
+        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+        ('LEFTPADDING', (0, 0), (-1, -1), 3),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+        ('TOPPADDING', (0, 0), (-1, -1), 2),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ('FONTSIZE', (0, 0), (-1, -1), font_size),
+    ]
+    if header:
+        style_cmds += [
+            ('BACKGROUND', (0, 0), (-1, 0), NAVY2),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ]
+    style_cmds.append(('ROWBACKGROUNDS', (0, 1 if header else 0), (-1, -1), [colors.white, LIGHT]))
+    t = Table(data, colWidths=col_widths, repeatRows=1 if header else 0)
+    t.setStyle(TableStyle(style_cmds))
+    return t
+
+
+def wrap_row(row):
+    return [Paragraph(str(c), S_TABLE_CELL) for c in row]
+
+
+def wrap_ans_row(row):
+    return [Paragraph(str(c), S_ANS_CELL) for c in row]
+
+
+# ---------------------------------------------------------------- page template
+
+def header_footer(canvas, doc):
+    canvas.saveState()
+    canvas.setFont('Helvetica-Bold', 8)
+    canvas.setFillColor(NAVY)
+    canvas.drawString(MARGIN, PAGE_H - 0.75*cm, HEADER_TEXT)
+    canvas.setStrokeColor(GOLD)
+    canvas.setLineWidth(1.1)
+    canvas.line(MARGIN, PAGE_H - 0.85*cm, PAGE_W - MARGIN, PAGE_H - 0.85*cm)
+    canvas.setFont('Helvetica', 7.5)
+    canvas.setFillColor(GREY)
+    canvas.drawCentredString(PAGE_W/2.0, 0.55*cm, f"Page {doc.page}")
+    canvas.drawRightString(PAGE_W - MARGIN, 0.55*cm, "Indian Polity — Compact Notes")
+    canvas.restoreState()
+
+
+def build_doc(filename):
+    doc = BaseDocTemplate(filename, pagesize=A4,
+                           leftMargin=MARGIN, rightMargin=MARGIN,
+                           topMargin=1.1*cm, bottomMargin=0.9*cm)
+    top = PAGE_H - 1.1*cm - 0.35*cm
+    bottom = 0.9*cm
+    frame_h = top - bottom
+    frame1 = Frame(MARGIN, bottom, COL_W, frame_h, id='col1',
+                    leftPadding=0, rightPadding=6, topPadding=0, bottomPadding=0)
+    frame2 = Frame(MARGIN + COL_W + GUTTER, bottom, COL_W, frame_h, id='col2',
+                    leftPadding=6, rightPadding=0, topPadding=0, bottomPadding=0)
+    template = PageTemplate(id='TwoCol', frames=[frame1, frame2], onPage=header_footer)
+    doc.addPageTemplates([template])
+    return doc
+
+# =================================================================
+# CONTENT
+# =================================================================
+
+story = []
+
+def title_block():
+    story.append(Paragraph("Indian Constitution — Making, Evolution &amp; Provisions",
+                            mk('Title', fontName='Helvetica-Bold', fontSize=13, textColor=NAVY,
+                               alignment=TA_CENTER, spaceAfter=2)))
+    story.append(Paragraph("Complete Concept Notes + Practice MCQs (Source: PW Ollie IAS YouTube Lecture)",
+                            mk('Subtitle', fontName='Helvetica-Oblique', fontSize=8, textColor=GREY,
+                               alignment=TA_CENTER, spaceAfter=6)))
+    story.append(HRFlowable(width="100%", thickness=1, color=GOLD, spaceAfter=6))
+
+title_block()
+
+# ---------- 1. Constituent Assembly ----------
+story.append(section_header("1. Constitution-Making Journey &amp; Constituent Assembly"))
+story.append(bullet("<b>1928 Nehru Report</b> — first vision of a future Indian Constitution."))
+story.append(bullet("<b>1934</b> — M.N. Roy first officially proposed a Constituent Assembly."))
+story.append(bullet("<b>1940 August Offer</b> — British accepted, in principle, that Indians would frame their own Constitution."))
+story.append(bullet("<b>1946 Cabinet Mission Plan</b> — provided for elections &amp; formation of the Constituent Assembly."))
+story.append(bullet("<b>9 Dec 1946</b> — First meeting; Dr. Sachchidananda Sinha = temporary President."))
+story.append(bullet("<b>11 Dec 1946</b> — Dr. Rajendra Prasad elected permanent President; H.C. Mukherjee = Vice-President; Sir B.N. Rau = Constitutional Advisor."))
+story.append(bullet("Membership: <b>389 &rarr; 299</b> after Partition (1947)."))
+story.append(bullet("Time taken: <b>2 years, 11 months, 18 days</b>; 11 sessions over <b>165 days</b>; Draft Constitution alone discussed for <b>114 days</b>. Cost &asymp; <b>&#8377;64 lakh</b>."))
+story.append(bullet("<b>26 Nov 1949</b> — Constitution adopted (celebrated as <b>Samvidhan/Constitution Day</b>)."))
+story.append(bullet("<b>26 Jan 1950</b> — Constitution commenced (Republic Day) — date chosen to mark Purna Swaraj declared by INC on 26 Jan 1930 at the Ravi river bank."))
+story.append(bullet("<b>Drafting Committee</b> chaired by <b>Dr. B.R. Ambedkar</b> — the &ldquo;Architect of the Indian Constitution&rdquo;."))
+story.append(bullet("Nehru headed Union Constitution Committee &amp; Union Powers Committee; <b>Sardar Patel</b> headed Provincial Constitution Committee &amp; Advisory Committee on FR/Minorities; <b>G.V. Mavalankar</b> ran daily proceedings as provisional Speaker."))
+story.append(bullet("Entirely <b>hand-written</b> (no printing press) by <b>Prem Behari Narain Raizada</b> in italic calligraphy; pages illustrated by <b>Nandlal Bose</b> &amp; Shantiniketan artists."))
+story.append(bullet("Two original copies (English &amp; Hindi); Hindi copy made <b>authoritative</b> by the <b>58th Amendment, 1987</b>."))
+story.append(bullet("Power divided via <b>Union, State &amp; Concurrent Lists</b> (7th Schedule) to minimise Centre&ndash;State conflict."))
+
+# ---------- 2. Key Features ----------
+story.append(section_header("2. Key Features of the Constitution"))
+story.append(bullet("<b>Longest written Constitution</b> in the world."))
+story.append(bullet("<b>Parliamentary system</b> (British model) — government accountable to elected representatives."))
+story.append(bullet("<b>Federal structure with a strong Centre</b> — for national unity &amp; stability."))
+story.append(bullet("Blend of <b>rigidity and flexibility</b> in the amendment process."))
+story.append(bullet("<b>Independent Judiciary</b> ensuring impartial justice."))
+story.append(bullet("<b>Fundamental Rights</b> — some extend to non-citizens too."))
+story.append(bullet("<b>DPSP</b> guide the State toward social justice &amp; welfare."))
+story.append(bullet("<b>Single Citizenship</b> for the whole country."))
+story.append(bullet("<b>Secularism</b> — no State religion, equal treatment of all religions."))
+story.append(bullet("<b>Emergency provisions</b> with checks &amp; balances against misuse."))
+
+# ---------- 3. Preamble ----------
+story.append(section_header("3. The Preamble"))
+story.append(body("Declares India <b>Sovereign, Socialist, Secular, Democratic, Republic</b>. The words "
+                   "<b>&ldquo;Socialist&rdquo;</b> and <b>&ldquo;Secular&rdquo;</b> (and the idea of &ldquo;Integrity&rdquo;) were "
+                   "<b>NOT in the original Preamble</b> — added by the <b>42nd Amendment, 1976</b>."))
+story.append(sub_header("Landmark Cases on the Preamble"))
+story.append(bullet("<b>Berubari Case (1960)</b> — Preamble is NOT a part of the Constitution."))
+story.append(bullet("<b>Kesavananda Bharati (1973)</b> — Preamble IS part of the Constitution's <b>Basic Structure</b>; overruled Berubari."))
+story.append(bullet("<b>Minerva Mills (1980)</b> — reaffirmed Preamble ideals cannot be destroyed."))
+story.append(bullet("<b>LIC Case (1995)</b> — confirmed Preamble is an <b>integral part</b> of the Constitution."))
+
+# ---------- 4. Sources ----------
+story.append(section_header("4. Sources of the Indian Constitution"))
+src_data = [["Country", "Feature Borrowed"],
+            ["Govt. of India Act, 1935", "Administrative &amp; structural framework (largest single source)"],
+            ["United Kingdom", "Parliamentary system of government"],
+            ["USA", "Fundamental Rights, Judicial Review"],
+            ["Ireland", "Directive Principles of State Policy"],
+            ["Canada", "Federal system with a strong Centre"],
+            ["Australia", "Concurrent List"],
+            ["Germany", "Suspension of FR during Emergency"],
+            ["France", "Liberty, Equality, Fraternity ideals"],
+            ["USSR", "Fundamental Duties"],
+            ["South Africa", "Procedure for Constitutional amendment"]]
+src_rows = [wrap_row(src_data[0])] + [wrap_row(r) for r in src_data[1:]]
+story.append(make_table(src_rows, [3.6*cm, COL_W-3.6*cm]))
+
+# ---------- 5. Part I ----------
+story.append(section_header("5. Part I — The Union &amp; its Territory (Art. 1&ndash;4)"))
+story.append(bullet("<b>Art 1</b>: &ldquo;India, that is Bharat, shall be a Union of States&rdquo; — <b>not a federation</b>; States have no right to secede."))
+story.append(bullet("<b>Art 2</b>: Parliament may admit/establish new external territories into the Union."))
+story.append(bullet("<b>Art 3</b>: Parliament may alter area/boundary/name of an existing State (affected State's legislature consulted, opinion <b>not binding</b>)."))
+story.append(bullet("<b>Art 4</b>: Laws under Art 2/3 are <b>not treated as Constitutional Amendments</b> — simple majority suffices."))
+
+# ---------- 6. Part II ----------
+story.append(section_header("6. Part II — Citizenship (Art. 5&ndash;11)"))
+story.append(bullet("<b>Art 5</b>: Citizenship at commencement (26 Jan 1950) — birth, parentage, or 5 yrs continuous residence."))
+story.append(bullet("<b>Art 6</b>: Migrants from Pakistan — cut-off date <b>19 July 1948</b> (Permit System started)."))
+story.append(bullet("<b>Art 7</b>: Persons who migrated to Pakistan after <b>1 March 1947</b> not deemed citizens (unless repatriated)."))
+story.append(bullet("<b>Art 8</b>: Persons of Indian origin residing abroad — citizenship via registration at Indian mission."))
+story.append(bullet("<b>Art 9</b>: <b>Single citizenship</b> principle — voluntarily acquiring foreign citizenship ends Indian citizenship (no dual citizenship)."))
+story.append(bullet("<b>Art 10</b>: Continuance of citizenship subject to future Parliamentary law."))
+story.append(bullet("<b>Art 11</b>: Parliament has full power to regulate citizenship by law."))
+
+# ---------- 7. Part III ----------
+story.append(section_header("7. Part III — Fundamental Rights (Art. 12&ndash;35)"))
+story.append(bullet("<b>Art 12</b>: Defines &ldquo;State&rdquo; — Centre, Parliament, States, local authorities."))
+story.append(bullet("<b>Art 13</b>: Any law inconsistent with FRs is <b>void</b>."))
+story.append(sub_header("Right to Equality (Art 14&ndash;18)"))
+story.append(bullet("<b>Art 14</b> equality before law; <b>Art 15</b> no discrimination (religion/race/caste/sex/birthplace) — allows special provisions for women, children, SC/ST/OBC; <b>Art 16</b> equal opportunity in public employment + reservation; <b>Art 17</b> abolition of untouchability."))
+story.append(sub_header("Right to Freedom (Art 19&ndash;22)"))
+story.append(bullet("<b>Art 19</b> — six freedoms: speech &amp; expression, peaceful assembly, form associations, movement, residence, profession/trade (subject to reasonable restrictions)."))
+story.append(bullet("<b>Art 20</b> — protection re: conviction: no ex-post-facto law, no double jeopardy, no self-incrimination."))
+story.append(bullet("<b>Art 21</b> — &ldquo;heartbeat&rdquo; of the Constitution: no deprivation of life/personal liberty except by procedure established by law. Expanded via SC judgments to include: dignity, clean environment, education, speedy trial, <b>Right to Privacy (Puttaswamy case)</b>, <b>Right to Digital Access (SC, 30 Apr 2025)</b>."))
+story.append(bullet("<b>Art 22</b> — protection against arrest &amp; detention: right to be informed, right to a lawyer, production before magistrate within 24 hrs; also regulates preventive detention."))
+story.append(sub_header("Right against Exploitation (Art 23&ndash;24)"))
+story.append(bullet("<b>Art 23</b> — prohibits human trafficking &amp; forced/bonded labour (exception: compulsory service for public purposes, e.g. military)."))
+story.append(bullet("<b>Art 24</b> — no child below <b>14 years</b> in factories, mines or hazardous work."))
+story.append(sub_header("Right to Freedom of Religion (Art 25&ndash;28)"))
+story.append(bullet("<b>Art 25</b> freedom of conscience &amp; to profess/practise/propagate religion (subject to public order, morality, health); <b>Art 26</b> freedom to manage religious affairs; <b>Art 27</b> no tax proceeds used to promote a particular religion; <b>Art 28</b> no forced religious instruction in certain educational institutions."))
+story.append(sub_header("Cultural &amp; Educational Rights (Art 29&ndash;30)"))
+story.append(bullet("<b>Art 29</b> — right of any group to conserve its language, script, culture. <b>Art 30</b> — minorities' right to establish &amp; administer educational institutions."))
+story.append(sub_header("Art 31, 32"))
+story.append(bullet("<b>Art 31</b> (Right to Property) — <b>removed from FRs by the 44th Amendment</b>; now an ordinary legal right under <b>Art 300A</b>."))
+story.append(bullet("<b>Art 32</b> — Right to Constitutional Remedies; called <b>&ldquo;Heart and Soul&rdquo;</b> of the Constitution by Dr. Ambedkar. SC issues <b>writs</b>: Habeas Corpus, Mandamus, Prohibition, Certiorari, Quo Warranto."))
+story.append(bullet("<b>Art 33&ndash;35</b> — special provisions: Parliament may restrict FRs for armed forces (33); extra powers during war/emergency (34); Parliament empowered to make laws giving effect to these rights (35)."))
+
+# ---------- 8. Part IV DPSP ----------
+story.append(section_header("8. Part IV — Directive Principles of State Policy (Art. 36&ndash;51)"))
+story.append(body("DPSPs act as a <b>moral compass</b> for governance — aim at social &amp; economic democracy. "
+                   "<b>Art 37</b>: DPSPs are <b>non-justiciable</b> (not enforceable in court) but &ldquo;fundamental in governance&rdquo;."))
+dpsp_data = [["Article", "Key Idea"],
+             ["38", "Welfare state; reduce inequality"],
+             ["39 / 39A", "Equitable resources, equal pay; free legal aid (39A added by 42nd Amdt.)"],
+             ["40", "Organise Gram Panchayats (Gandhian principle)"],
+             ["41", "Social security — work, education, public assistance"],
+             ["42", "Just work conditions &amp; maternity relief"],
+             ["43 / 43A", "Living wage for workers; worker participation in management (43A, 42nd Amdt.)"],
+             ["44", "Uniform Civil Code (still unimplemented)"],
+             ["45", "Free &amp; compulsory education; ECCE added by 86th Amdt., 2002"],
+             ["46", "Promote SC/ST/weaker sections' education &amp; economic interests"],
+             ["47", "Raise nutrition &amp; public health; prohibit intoxicants"],
+             ["48 / 48A", "Modernise agriculture/cattle; environment protection (48A, 42nd Amdt.)"],
+             ["49", "Protect monuments &amp; historic sites"],
+             ["50", "Separation of judiciary from executive"],
+             ["51", "Promote international peace &amp; security"]]
+story.append(make_table([wrap_row(dpsp_data[0])] + [wrap_row(r) for r in dpsp_data[1:]],
+                         [1.7*cm, COL_W-1.7*cm]))
+
+story.append(sub_header("FR vs DPSP — Landmark Judgments"))
+story.append(bullet("<b>Champakam Dorairajan (1951)</b> — FR prevail over DPSP in case of conflict."))
+story.append(bullet("<b>Golaknath (1967)</b> — Parliament CANNOT amend/curtail Fundamental Rights."))
+story.append(bullet("<b>Kesavananda Bharati (1973)</b> — overruled Golaknath: Parliament CAN amend any part, including FR, but CANNOT alter the <b>Basic Structure</b> &mdash; birth of the <b>Basic Structure Doctrine</b>."))
+story.append(bullet("<b>Minerva Mills (1980)</b> — harmony/balance between FR &amp; DPSP is itself part of the Basic Structure."))
+
+# ---------- 9. Fundamental Duties ----------
+story.append(section_header("9. Part IVA — Fundamental Duties (Art. 51A)"))
+story.append(body("Added by the <b>42nd Amendment, 1976</b> (not in original Constitution) to build discipline &amp; "
+                   "responsibility. Originally <b>10 duties</b>; <b>11th duty</b> added by the <b>86th Amendment, 2002</b> "
+                   "(parents/guardians must send children aged 6&ndash;14 to school). Duties include: abide by the "
+                   "Constitution, respect the flag &amp; anthem, uphold sovereignty &amp; integrity, defend the country, "
+                   "promote harmony, preserve composite culture &amp; the environment, develop scientific temper, "
+                   "safeguard public property, strive for excellence."))
+
+# ---------- 10. Union Government ----------
+story.append(section_header("10. Part V — Th
